@@ -1,5 +1,6 @@
 # tools/weather.py
 # Wetterdaten von Open-Meteo (kostenlos, kein API-Key nötig)
+
 import requests
 
 GEO_URL = "https://geocoding-api.open-meteo.com/v1/search"
