@@ -13,11 +13,18 @@ QUERIES = {
     "security_defaults": "/policies/identitySecurityDefaultsEnforcementPolicy",
     # isPrivileged = Microsofts eigene Einstufung privilegierter Rollen, gibt es nur in beta
     "privileged_roles": ("/roleManagement/directory/roleDefinitions?$select=id,displayName,templateId&$filter=isPrivileged eq true", "beta"),
+    "authorization_policy": "/policies/authorizationPolicy",
+    "domains": "/domains?$select=id,isVerified,authenticationType,passwordValidityPeriodInDays",
+    # signInActivity braucht AuditLog.Read.All + Entra ID P1
+    "sign_in_activity": "/users?$select=id,userPrincipalName,signInActivity",
+    "applications": "/applications?$select=id,appId,displayName,passwordCredentials,keyCredentials",
+    # braucht RoleEligibilitySchedule.Read.Directory (+ Entra ID P2 für PIM)
+    "role_eligibility": "/roleManagement/directory/roleEligibilitySchedules",
 }
 
 # Graph ignoriert $select innerhalb von $expand=principal und liefert das komplette
 # Objekt (60+ Felder) → lokal auf das Nötige kürzen
-PRINCIPAL_FIELDS = ("@odata.type", "id", "displayName", "userPrincipalName", "userType", "accountEnabled")
+PRINCIPAL_FIELDS = ("@odata.type", "id", "displayName", "userPrincipalName", "userType", "accountEnabled", "onPremisesSyncEnabled")
 
 
 GRAPH_APP_ID = "00000003-0000-0000-c000-000000000000"  # appId von Microsoft Graph (in jedem Tenant gleich)

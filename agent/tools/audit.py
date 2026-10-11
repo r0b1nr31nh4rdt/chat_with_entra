@@ -7,6 +7,9 @@
 #   evidence (Text), reference (CIS/Microsoft), optional note
 
 import os
+from datetime import datetime, timedelta, timezone
+
+import requests
 
 from tenant import fetch_graph_app_permissions, fetch_service_principal_id
 
@@ -286,28 +289,315 @@ def check_global_admin_count():
     )]
 
 
+# ─── Check 5: MFA für alle Benutzer ─────────────────────────────────────────
+
+
+def check_user_mfa():
+    enabled = {u["id"] for u in _load("users") if u.get("accountEnabled")}
+    entries = [m for m in _load("mfa_registration") if m["id"] in enabled]
+    missing = sorted(m["userPrincipalName"] for m in entries if not m["isMfaRegistered"])
+    if not missing:
+        return []
+    return [_finding(
+        "USER-NO-MFA", "high",
+        "Benutzer ohne MFA-Registrierung",
+        missing,
+        f"{len(missing)} von {len(entries)} aktiven Benutzern: isMfaRegistered=false "
+        f"({round(100 * len(missing) / len(entries))} %)",
+        "CIS M365 5.2.2.2",
+    )]
+
+
+# ─── Check 6: Tenant-Einstellungen (Consent, App-Registrierung, Gäste) ──────
+
+# allowInvitesFrom von restriktiv nach offen; CIS verlangt höchstens adminsAndGuestInviters
+INVITE_SEVERITY = {"adminsGuestInvitersAndAllMembers": "low", "everyone": "medium"}
+
+
+def check_tenant_settings():
+    policy = _load("authorization_policy")
+    perms = policy.get("defaultUserRolePermissions") or {}
+    findings = []
+
+    # User Consent: jede ManagePermissionGrantsForSelf.*-Policy erlaubt Benutzern, Apps Zugriff zu erteilen
+    consent = [p for p in perms.get("permissionGrantPoliciesAssigned") or [] if p.startswith("ManagePermissionGrantsForSelf.")]
+    if consent:
+        legacy = any(p.endswith("microsoft-user-default-legacy") for p in consent)
+        findings.append(_finding(
+            "USER-CONSENT-ALLOWED", "high" if legacy else "medium",
+            "Benutzer dürfen Apps selbst Zugriff auf Unternehmensdaten erteilen",
+            ["Alle Benutzer"],
+            f"permissionGrantPoliciesAssigned: {', '.join(consent)}"
+            + (" (legacy = Consent für alle Apps ohne Einschränkung)" if legacy else ""),
+            "CIS M365 5.1.5.1",
+        ))
+
+    if perms.get("allowedToCreateApps"):
+        findings.append(_finding(
+            "USER-APP-REGISTRATION-ALLOWED", "low",
+            "Benutzer dürfen Anwendungen registrieren",
+            ["Alle Benutzer"],
+            "defaultUserRolePermissions.allowedToCreateApps=true",
+            "CIS M365 5.1.2.2",
+        ))
+
+    invites = policy.get("allowInvitesFrom")
+    if invites in INVITE_SEVERITY:
+        findings.append(_finding(
+            "GUEST-INVITE-UNRESTRICTED", INVITE_SEVERITY[invites],
+            "Gast-Einladungen nicht auf Admins/Guest Inviter beschränkt",
+            ["Alle Benutzer" if invites == "everyone" else "Alle Mitglieder"],
+            f"allowInvitesFrom={invites} (Soll: adminsAndGuestInviters oder none)",
+            "CIS M365 5.1.6.3",
+        ))
+    return findings
+
+
+# ─── Check 7: Privilegierte Zuweisungen (Anzahl, Cloud-only) ─────────────────
+
+PRIVILEGED_MAX = 10  # Microsoft: weniger als 10 privilegierte Rollenzuweisungen
+
+
+def check_privileged_assignments():
+    assignments = _privileged_assignments()
+    findings = []
+
+    if len(assignments) >= PRIVILEGED_MAX:
+        findings.append(_finding(
+            "PRIVILEGED-ASSIGNMENTS-TOO-MANY", "medium",
+            "Zu viele privilegierte Rollenzuweisungen",
+            sorted({a["principal"].get("userPrincipalName") or a["principal"].get("displayName") for a in assignments}),
+            f"{len(assignments)} privilegierte Rollenzuweisungen (Soll: unter {PRIVILEGED_MAX})",
+            REF_ROLES_BEST_PRACTICES + " (#6)",
+        ))
+
+    # On-Prem-synchronisierte Admins: eine AD-Kompromittierung reicht bis in die Cloud
+    synced = sorted({
+        a["principal"].get("userPrincipalName") for a in assignments
+        if _is_user(a["principal"]) and a["principal"].get("onPremisesSyncEnabled")
+    })
+    if synced:
+        findings.append(_finding(
+            "ADMIN-SYNCED-ACCOUNT", "high",
+            "Privilegierte Rollen an On-Premises-synchronisierte Konten vergeben",
+            synced,
+            f"{len(synced)} privilegierte Benutzer mit onPremisesSyncEnabled=true",
+            REF_ROLES_BEST_PRACTICES + " (#9)",
+        ))
+    return findings
+
+
+# ─── Check 8: Passwortablauf ────────────────────────────────────────────────
+
+NEVER_EXPIRES = 2147483647  # Graph-Wert für „Passwörter laufen nie ab“
+
+
+def check_password_expiration():
+    expiring = [
+        d for d in _load("domains")
+        if d.get("isVerified") and d.get("authenticationType") == "Managed"  # föderierte Domains regelt der IdP
+        and (d.get("passwordValidityPeriodInDays") or NEVER_EXPIRES) < NEVER_EXPIRES
+    ]
+    if not expiring:
+        return []
+    return [_finding(
+        "PASSWORD-EXPIRATION-ENABLED", "low",
+        "Periodischer Passwortablauf aktiv",
+        sorted(d["id"] for d in expiring),
+        "; ".join(f"{d['id']}: passwordValidityPeriodInDays={d['passwordValidityPeriodInDays']}" for d in expiring),
+        "CIS M365 1.3.1",
+    )]
+
+
+# ─── Check 9: Risk-Policies (Identity Protection) ───────────────────────────
+
+
+def _risk_policy_exists(policies, field):
+    """Aktive CA-Policy für alle Benutzer mit Risk-Bedingung (userRiskLevels / signInRiskLevels)."""
+    return any(
+        p.get("state") == "enabled"
+        and (p.get("conditions") or {}).get(field)
+        and "All" in (((p.get("conditions") or {}).get("users") or {}).get("includeUsers") or [])
+        for p in policies
+    )
+
+
+def check_risk_policies():
+    policies = _load("ca_policies")
+    note = "Risk-basierte Conditional-Access-Policies erfordern Microsoft Entra ID P2."
+    findings = []
+    for field, id_, title, ref in (
+        ("userRiskLevels", "NO-USER-RISK-POLICY", "Keine User-Risk-Policy aktiv", "CIS M365 5.2.2.6"),
+        ("signInRiskLevels", "NO-SIGNIN-RISK-POLICY", "Keine Sign-in-Risk-Policy aktiv", "CIS M365 5.2.2.7"),
+    ):
+        if not _risk_policy_exists(policies, field):
+            findings.append(_finding(
+                id_, "medium", title, ["Alle Benutzer"],
+                f"Keine aktive CA-Policy mit conditions.{field} für alle Benutzer ({len(policies)} CA-Policies insgesamt)",
+                ref, note,
+            ))
+    return findings
+
+
+# ─── Check 10: Inaktive privilegierte Konten ────────────────────────────────
+
+INACTIVE_DAYS = 90
+
+
+def _last_sign_in(activity):
+    """Letzte erfolgreiche Anmeldung (interaktiv oder nicht), None = nie angemeldet."""
+    if not activity:
+        return None
+    stamps = [activity.get(k) for k in ("lastSuccessfulSignInDateTime", "lastSignInDateTime", "lastNonInteractiveSignInDateTime")]
+    stamps = [datetime.fromisoformat(s.replace("Z", "+00:00")) for s in stamps if s]
+    return max(stamps) if stamps else None
+
+
+def check_inactive_admins():
+    activity = {u["id"]: u.get("signInActivity") for u in _load("sign_in_activity")}
+    cutoff = datetime.now(timezone.utc) - timedelta(days=INACTIVE_DAYS)
+
+    admins = {
+        a["principalId"]: a["principal"].get("userPrincipalName")
+        for a in _privileged_assignments() if _is_user(a["principal"])
+    }
+    inactive, never = [], []
+    for uid, upn in admins.items():
+        last = _last_sign_in(activity.get(uid))
+        if last is None:
+            never.append(upn)
+        elif last < cutoff:
+            inactive.append(f"{upn} (zuletzt {last:%Y-%m-%d})")
+    if not inactive and not never:
+        return []
+
+    parts = []
+    if inactive:
+        parts.append(f"{len(inactive)} seit über {INACTIVE_DAYS} Tagen ohne Anmeldung: {', '.join(inactive)}")
+    if never:
+        parts.append(f"{len(never)} ohne jede aufgezeichnete Anmeldung")
+    return [_finding(
+        "ADMIN-INACTIVE", "medium",
+        "Inaktive privilegierte Konten",
+        sorted(never + [i.split(" (")[0] for i in inactive]),
+        f"{len(inactive) + len(never)} von {len(admins)} privilegierten Benutzern: " + "; ".join(parts),
+        REF_ROLES_BEST_PRACTICES + " (#4 Access Reviews)",
+        note="signInActivity wird erst ab Entra ID P1 erfasst; „nie angemeldet“ kann auch bedeuten, dass die Anmeldung vor Beginn der Aufzeichnung lag.",
+    )]
+
+
+# ─── Check 11: App-Secrets ──────────────────────────────────────────────────
+
+SECRET_MAX_DAYS = 365  # Microsoft empfiehlt kurze Laufzeiten bzw. Zertifikate statt Secrets
+
+
+def _parse(ts):
+    return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+
+
+def check_app_credentials():
+    now = datetime.now(timezone.utc)
+    long_lived, expired = [], []
+    for app in _load("applications"):
+        for c in app.get("passwordCredentials") or []:
+            start, end = _parse(c["startDateTime"]), _parse(c["endDateTime"])
+            label = f"{app['displayName']} ({c.get('displayName') or 'Secret'})"
+            if end < now:
+                expired.append(f"{label}, abgelaufen {end:%Y-%m-%d}")
+            elif (end - start).days > SECRET_MAX_DAYS:
+                long_lived.append(f"{label}, gültig {(end - start).days} Tage bis {end:%Y-%m-%d}")
+
+    findings = []
+    if long_lived:
+        findings.append(_finding(
+            "APP-SECRET-LONG-LIFETIME", "medium",
+            f"App-Secrets mit Laufzeit über {SECRET_MAX_DAYS} Tage",
+            sorted({x.split(" (")[0] for x in long_lived}),
+            "; ".join(long_lived),
+            "Microsoft Learn: Best practices for app registrations (Zertifikate statt Client Secrets)",
+        ))
+    if expired:
+        findings.append(_finding(
+            "APP-SECRET-EXPIRED", "low",
+            "Abgelaufene App-Secrets nicht entfernt",
+            sorted({x.split(" (")[0] for x in expired}),
+            "; ".join(expired),
+            "Microsoft Learn: Best practices for app registrations",
+        ))
+    return findings
+
+
+# ─── Check 12: PIM (Just-in-time statt dauerhafter Zuweisung) ───────────────
+
+
+def check_pim():
+    reference = REF_ROLES_BEST_PRACTICES + " (#2 PIM)"
+    try:
+        eligible = _load("role_eligibility")
+    except requests.HTTPError as e:
+        if e.response.status_code != 403:
+            raise
+        return [_finding(
+            "PIM-NOT-CHECKABLE", "informational",
+            "PIM-Nutzung nicht prüfbar",
+            [], "roleEligibilitySchedules: HTTP 403 – Permission RoleEligibilitySchedule.Read.Directory fehlt",
+            reference, note="PIM erfordert außerdem Microsoft Entra ID P2.",
+        )]
+
+    eligible_ids = {e["principalId"] for e in eligible}
+    standing = sorted({
+        a["principal"].get("userPrincipalName") for a in _privileged_assignments()
+        if _is_user(a["principal"]) and a["principalId"] not in eligible_ids
+    })
+    if not standing:
+        return []
+    return [_finding(
+        "PIM-NOT-USED", "medium",
+        "Dauerhafte privilegierte Zuweisungen statt PIM",
+        standing,
+        f"{len(standing)} privilegierte Benutzer mit aktiver Zuweisung ohne PIM-Eligibility "
+        f"({len(eligible)} Eligibility-Schedules im Tenant)",
+        reference,
+        note="Break-Glass-Konten sollen bewusst dauerhaft zugewiesen bleiben.",
+    )]
+
+
 # ─── run_audit ──────────────────────────────────────────────────────────────
 
+# Check-Funktion → Beschreibung für das Modell (Tool-Description)
 CHECKS = {
-    "legacy_auth": check_legacy_auth,
-    "admin_mfa": check_admin_mfa,
-    "service_principals": check_service_principals,
-    "global_admin_count": check_global_admin_count,
+    check_legacy_auth: "Wird Legacy Authentication per Security Defaults oder Conditional Access blockiert?",
+    check_admin_mfa: "Haben privilegierte Benutzer MFA registriert, und wird MFA für sie auch erzwungen?",
+    check_service_principals: "Service Principals mit privilegierten Directory-Rollen oder kritischen Graph-App-Permissions.",
+    check_global_admin_count: "Liegt die Anzahl der Global Administrators zwischen 2 und 4 (CIS)?",
+    check_user_mfa: "Haben alle aktiven Benutzer MFA registriert?",
+    check_tenant_settings: "Tenant-Einstellungen: User Consent für Apps, App-Registrierung durch Benutzer, Gast-Einladungen.",
+    check_privileged_assignments: "Weniger als 10 privilegierte Rollenzuweisungen, und nur Cloud-only-Konten in privilegierten Rollen?",
+    check_password_expiration: "Ist periodischer Passwortablauf deaktiviert (CIS-Empfehlung)?",
+    check_risk_policies: "Gibt es aktive User-Risk- und Sign-in-Risk-Policies (Identity Protection)?",
+    check_inactive_admins: f"Privilegierte Benutzer ohne Anmeldung seit über {INACTIVE_DAYS} Tagen.",
+    check_app_credentials: f"App-Secrets mit Laufzeit über {SECRET_MAX_DAYS} Tage oder abgelaufene, nicht entfernte Secrets.",
+    check_pim: "Werden privilegierte Rollen just-in-time über PIM vergeben statt dauerhaft?",
 }
 
 
 def run_audit():
-    findings, errors = [], []
-    for name, check in CHECKS.items():
+    findings, errors, passed = [], [], []
+    for check in CHECKS:
         try:
-            findings += check()
+            result = check()
         except Exception as e:
             # Ein fehlgeschlagener Check soll den Rest des Audits nicht verhindern
-            errors.append({"check": name, "error": f"{type(e).__name__}: {e}"})
+            errors.append({"check": check.__name__, "error": f"{type(e).__name__}: {e}"})
+            continue
+        findings += result
+        if not result:
+            passed.append(check.__name__)
 
     findings.sort(key=lambda f: SEVERITY_ORDER.index(f["severity"]))
     return {
-        "checks_run": list(CHECKS),
+        "checks_run": [c.__name__ for c in CHECKS],
+        "checks_passed": passed,  # bestandene Prüfungen gehören auch in einen Audit-Report
         "summary": {s: sum(f["severity"] == s for f in findings) for s in SEVERITY_ORDER},
         "findings": findings,
         "errors": errors,
@@ -320,38 +610,11 @@ TOOLS = [
     {
         "type": "function",
         "name": "run_audit",
-        "description": "Führt alle Security-Checks (Legacy Auth, Admin-MFA, Service Principals, Anzahl Global Admins) live aus und liefert alle Findings sortiert nach Severity.",
+        "description": f"Führt alle {len(CHECKS)} Security-Checks live aus und liefert alle Findings sortiert nach Severity, plus Liste der bestandenen Checks.",
         "parameters": _NO_PARAMS,
     },
-    {
-        "type": "function",
-        "name": "check_legacy_auth",
-        "description": "Audit-Check: Wird Legacy Authentication per Security Defaults oder Conditional Access blockiert?",
-        "parameters": _NO_PARAMS,
-    },
-    {
-        "type": "function",
-        "name": "check_admin_mfa",
-        "description": "Audit-Check: Haben privilegierte Benutzer MFA registriert, und wird MFA für sie auch erzwungen?",
-        "parameters": _NO_PARAMS,
-    },
-    {
-        "type": "function",
-        "name": "check_service_principals",
-        "description": "Audit-Check: Service Principals mit privilegierten Directory-Rollen oder kritischen Graph-App-Permissions.",
-        "parameters": _NO_PARAMS,
-    },
-    {
-        "type": "function",
-        "name": "check_global_admin_count",
-        "description": "Audit-Check: Liegt die Anzahl der Global Administrators zwischen 2 und 4 (CIS)?",
-        "parameters": _NO_PARAMS,
-    },
+] + [
+    {"type": "function", "name": check.__name__, "description": f"Audit-Check: {desc}", "parameters": _NO_PARAMS}
+    for check, desc in CHECKS.items()
 ]
-FUNCS = {
-    "run_audit": run_audit,
-    "check_legacy_auth": check_legacy_auth,
-    "check_admin_mfa": check_admin_mfa,
-    "check_service_principals": check_service_principals,
-    "check_global_admin_count": check_global_admin_count,
-}
+FUNCS = {"run_audit": run_audit} | {check.__name__: check for check in CHECKS}

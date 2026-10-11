@@ -4,6 +4,8 @@
 import json
 from pathlib import Path
 
+import requests
+
 from tenant import QUERIES, fetch
 
 DATA_DIR = Path(__file__).parent / "data"
@@ -19,4 +21,8 @@ def save(name, items):
 
 
 for name in QUERIES:
-    save(name, fetch(name))
+    try:
+        save(name, fetch(name))
+    except requests.HTTPError as e:
+        # z. B. 403 bei fehlender Permission – restliche Abfragen trotzdem speichern
+        print(f"{name}: übersprungen ({e.response.status_code})")
