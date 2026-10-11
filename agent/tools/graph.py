@@ -7,16 +7,19 @@ from functools import lru_cache
 from tenant import fetch
 
 
+# Rollendefinitionen ändern sich praktisch nie → nur einmal pro Session laden
+_STATIC = {"role_definitions", "privileged_roles"}
+
+
 def _load(name):
-    # Rollendefinitionen (~145 Stück, ändern sich praktisch nie) nur einmal pro Session laden
-    if name == "role_definitions":
-        return _role_definitions()
+    if name in _STATIC:
+        return _cached(name)
     return fetch(name)
 
 
-@lru_cache(maxsize=1)
-def _role_definitions():
-    return fetch("role_definitions")
+@lru_cache(maxsize=None)
+def _cached(name):
+    return fetch(name)
 
 
 def _role_names():
@@ -52,6 +55,54 @@ def get_role_members(role_name):
     if not members and role_name.lower() not in {n.lower() for n in roles.values()}:
         raise ValueError(f"Rolle '{role_name}' unbekannt")
     return {"role": role_name, "count": len(members), "by_type": dict(Counter(m["type"] for m in members)), "members": members}
+
+
+def get_privileged_role_assignments():
+    # privilegierte Rollen-IDs (id + templateId, da Assignments auf beide verweisen können)
+    privileged = {}
+    for r in _load("privileged_roles"):
+        privileged[r["id"]] = r["displayName"]
+        privileged[r["templateId"]] = r["displayName"]
+    mfa = _mfa_by_user()
+
+    roles = {}
+    for a in _load("role_assignments"):
+        role = privileged.get(a["roleDefinitionId"])
+        if not role:
+            continue
+        p = a["principal"]
+        is_user = p.get("@odata.type") == "#microsoft.graph.user"
+        roles.setdefault(role, []).append({
+            "principalId": a["principalId"],
+            "displayName": p.get("displayName"),
+            "type": "user" if is_user else "servicePrincipal",
+            "userPrincipalName": p.get("userPrincipalName"),
+            "accountEnabled": p.get("accountEnabled"),
+            "isMfaRegistered": mfa.get(a["principalId"], {}).get("isMfaRegistered") if is_user else None,
+        })
+
+    def counts(members):
+        return {
+            "assignments": len(members),
+            "users": sum(m["type"] == "user" for m in members),
+            "servicePrincipals": sum(m["type"] == "servicePrincipal" for m in members),
+            "usersWithoutMfa": sum(m["isMfaRegistered"] is False for m in members),
+        }
+
+    # Gesamtzählung über eindeutige Principals (eine Person mit 2 Rollen zählt einmal)
+    unique = {m["principalId"]: m for members in roles.values() for m in members}
+    summary = counts(list(unique.values()))
+    summary["assignments"] = sum(len(m) for m in roles.values())
+    summary["uniquePrincipals"] = len(unique)
+    summary["rolesInUse"] = len(roles)
+
+    return {
+        "summary": summary,
+        "roles": [
+            {"role": role, **counts(members), "members": members}
+            for role, members in sorted(roles.items(), key=lambda kv: -len(kv[1]))
+        ],
+    }
 
 
 def list_users(user_type=None):
@@ -104,6 +155,12 @@ TOOLS = [
     },
     {
         "type": "function",
+        "name": "get_privileged_role_assignments",
+        "description": "Alle Mitglieder privilegierter Entra-Rollen (laut Microsoft-Einstufung), gruppiert nach Rolle, mit fertigen Zählungen (User, Service Principals, User ohne MFA) pro Rolle und gesamt.",
+        "parameters": {"type": "object", "properties": {}},
+    },
+    {
+        "type": "function",
         "name": "list_users",
         "description": "Listet Benutzer des Tenants, optional gefiltert nach Typ (Member oder Guest).",
         "parameters": {
@@ -129,6 +186,7 @@ TOOLS = [
 ]
 FUNCS = {
     "get_role_members": get_role_members,
+    "get_privileged_role_assignments": get_privileged_role_assignments,
     "list_users": list_users,
     "get_mfa_status": get_mfa_status,
     "get_auth_policies": get_auth_policies,

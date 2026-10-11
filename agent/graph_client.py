@@ -13,14 +13,15 @@ _cred = ClientSecretCredential(
     os.environ["PEARSON_CLIENT_SECRET"],
 )
 
-GRAPH = "https://graph.microsoft.com/v1.0"
+GRAPH = "https://graph.microsoft.com"
 
 
-def graph_get(path):
+def graph_get(path, version="v1.0"):
     """GET gegen Graph, folgt automatisch allen Seiten (@odata.nextLink).
-    Bei Endpoints ohne "value" (Einzelobjekt) wird das Objekt direkt zurückgegeben."""
+    Bei Endpoints ohne "value" (Einzelobjekt) wird das Objekt direkt zurückgegeben.
+    version="beta" nur für Felder, die es in v1.0 (noch) nicht gibt."""
     token = _cred.get_token("https://graph.microsoft.com/.default").token
-    url = GRAPH + path
+    url = f"{GRAPH}/{version}{path}"
     items = []
     while url:
         r = requests.get(url, headers={"Authorization": f"Bearer {token}"})
