@@ -46,6 +46,19 @@ jq '.[] | select(.isAdmin) | {userPrincipalName, isMfaRegistered}' data/mfa_regi
 
 # Wer hat die Rolle Global Administrator? (62e90394-… = Template-ID von Global Administrator)
 jq '.[] | select(.roleDefinitionId=="62e90394-69f5-4237-9190-012177145e10") | .principal.displayName' data/role_assignments.json
+
+# Welche Gäste gibt es?
+jq '.[] | select(.userType=="Guest") | {displayName, userPrincipalName, accountEnabled}' data/users.json
+
+# Hat ein Gast eine Rolle? (verknüpft role_assignments mit role_definitions für den Rollennamen)
+jq -n --slurpfile ra data/role_assignments.json --slurpfile rd data/role_definitions.json '
+  ($rd[0] | map({(.templateId): .displayName}) | add) as $roles
+  | $ra[0][] | select(.principal.userType=="Guest")
+  | {guest: .principal.userPrincipalName, role: ($roles[.roleDefinitionId] // .roleDefinitionId)}'
+
+# Keine CA-Policies – sind wenigstens die Security Defaults an?
+jq 'length' data/ca_policies.json
+jq '{displayName, isEnabled}' data/security_defaults.json
 ```
 
 ## Befunde Tenant-Audit (Stand: 2026-10-11)
