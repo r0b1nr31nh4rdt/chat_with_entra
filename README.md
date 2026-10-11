@@ -30,6 +30,8 @@ python main.py           # Chat starten (beenden mit "exit" oder leerer Eingabe)
 python fetch_tenant.py   # Tenant-Daten per Graph nach agent/data/ laden
 ```
 
+Die Entra-Tools im Chat fragen Graph bei jedem Aufruf **live** ab. `fetch_tenant.py` wird dafür nicht gebraucht – es speichert nur einen Snapshot für die `jq`-Auswertungen unten.
+
 ## Testen
 
 ```bash

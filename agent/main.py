@@ -5,7 +5,9 @@ import json
 from llm import client, DEPLOYMENT
 from logger import log
 from tools import TOOLS, FUNCS
+from pathlib import Path
 
+SYSTEM_PROMPT = (Path(__file__).parent / "prompts" / "system.md").read_text(encoding="utf-8")
 MAX_ROUNDS = 10  # Schutz gegen Endlosschleifen beim Tool-Calling
 
 
@@ -27,7 +29,12 @@ def ask(history):
     for round_ in range(1, MAX_ROUNDS + 1):
         log("request", round=round_, input=history)
 
-        response = client.responses.create(model=DEPLOYMENT, input=history, tools=TOOLS)
+        response = client.responses.create(
+            model=DEPLOYMENT,
+            instructions=SYSTEM_PROMPT,
+            input=history,
+            tools=TOOLS
+        )
 
         # SDK-Objekte sofort in Dicts umwandeln → history bleibt komplett JSON-fähig
         output = [item.model_dump(exclude_none=True) for item in response.output]
