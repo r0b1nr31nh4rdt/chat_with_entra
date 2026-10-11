@@ -1,0 +1,28 @@
+#MacOS
+.DS_Store
+
+# Environments
+.env
+.venv
+env/
+venv/
+
+# Python: compiled files and tool caches
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+logs/
+data/
+
+#vscode
+.vscode/
+
+# ─── Secrets ───
+*.pem
+*.key
+
+notes/*
+notizen/*
+hints & guide/*
