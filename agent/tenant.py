@@ -20,6 +20,34 @@ QUERIES = {
 PRINCIPAL_FIELDS = ("@odata.type", "id", "displayName", "userPrincipalName", "userType", "accountEnabled")
 
 
+GRAPH_APP_ID = "00000003-0000-0000-c000-000000000000"  # appId von Microsoft Graph (in jedem Tenant gleich)
+
+
+def fetch_graph_app_permissions():
+    """Alle Application-Permissions auf Microsoft Graph, mit Klarnamen.
+
+    Graph-SP finden → appRoleAssignedTo (wer hat welche Rolle auf Graph)
+    → appRoleId über die appRoles des Graph-SPs in Namen wie Directory.ReadWrite.All übersetzen.
+    """
+    sp = graph_get(f"/servicePrincipals?$filter=appId eq '{GRAPH_APP_ID}'&$select=id,appRoles")[0]
+    names = {r["id"]: r["value"] for r in sp["appRoles"]}
+    return [
+        {
+            "principalId": a["principalId"],
+            "principalDisplayName": a["principalDisplayName"],
+            "principalType": a["principalType"],
+            "permission": names.get(a["appRoleId"], a["appRoleId"]),
+        }
+        for a in graph_get(f"/servicePrincipals/{sp['id']}/appRoleAssignedTo")
+    ]
+
+
+def fetch_service_principal_id(app_id):
+    """Objekt-ID des Service Principals zu einer appId (z. B. der eigenen Audit-App)."""
+    sps = graph_get(f"/servicePrincipals?$filter=appId eq '{app_id}'&$select=id")
+    return sps[0]["id"] if sps else None
+
+
 def fetch(name):
     """Holt einen Datensatz live von Graph."""
     query = QUERIES[name]
