@@ -14,6 +14,7 @@ import requests
 from tenant import fetch_graph_app_permissions, fetch_service_principal_id
 
 from .graph import _load
+from .history import compare_audits, list_snapshots, save_snapshot
 
 SEVERITY_ORDER = ["critical", "high", "medium", "low", "informational"]
 
@@ -581,7 +582,8 @@ CHECKS = {
 }
 
 
-def run_audit():
+def _snapshot():
+    """Zustandsaufnahme: alle Checks ausführen, Findings mit auslösendem Check und Zeitstempel."""
     findings, errors, passed = [], [], []
     for check in CHECKS:
         try:
@@ -590,12 +592,13 @@ def run_audit():
             # Ein fehlgeschlagener Check soll den Rest des Audits nicht verhindern
             errors.append({"check": check.__name__, "error": f"{type(e).__name__}: {e}"})
             continue
-        findings += result
+        findings += [{**f, "check": check.__name__} for f in result]
         if not result:
             passed.append(check.__name__)
 
     findings.sort(key=lambda f: SEVERITY_ORDER.index(f["severity"]))
     return {
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
         "checks_run": [c.__name__ for c in CHECKS],
         "checks_passed": passed,  # bestandene Prüfungen gehören auch in einen Audit-Report
         "summary": {s: sum(f["severity"] == s for f in findings) for s in SEVERITY_ORDER},
@@ -604,13 +607,22 @@ def run_audit():
     }
 
 
+def run_audit():
+    """Snapshot speichern, danach als eigener Schritt mit dem vorherigen Snapshot vergleichen."""
+    audit = _snapshot()
+    snapshot_id = save_snapshot(audit)
+    changes = compare_audits(new=snapshot_id) if len(list_snapshots()) > 1 else None
+    return {"snapshot": snapshot_id, "audit": audit, "changes": changes}
+
+
 # Responses-API-Format: name/description/parameters direkt auf oberster Ebene
 _NO_PARAMS = {"type": "object", "properties": {}}
 TOOLS = [
     {
         "type": "function",
         "name": "run_audit",
-        "description": f"Führt alle {len(CHECKS)} Security-Checks live aus und liefert alle Findings sortiert nach Severity, plus Liste der bestandenen Checks.",
+        "description": f"Führt alle {len(CHECKS)} Security-Checks live aus und liefert alle Findings sortiert nach Severity, plus Liste der bestandenen Checks. "
+                       "Speichert das Ergebnis als Snapshot und vergleicht es danach mit dem vorherigen (changes: Score und Veränderungen).",
         "parameters": _NO_PARAMS,
     },
 ] + [

@@ -35,6 +35,7 @@ Alle Befehle aus dem Ordner `agent/` bei aktiver venv:
 cd agent
 python main.py           # Chat starten (beenden mit "exit" oder leerer Eingabe)
 python fetch_tenant.py   # Tenant-Daten per Graph nach agent/data/ laden
+python compare_audits.py # die letzten beiden gespeicherten Audits vergleichen (siehe Audit-Verlauf)
 ```
 
 `main.py` startet `mcp_server.py` automatisch als Unterprozess. Die Tools im Chat fragen Graph bei jedem Aufruf **live** ab. `fetch_tenant.py` wird dafür nicht gebraucht – es speichert nur einen Snapshot für die `jq`-Auswertungen unten.
@@ -44,6 +45,7 @@ Beispielfragen im Chat:
 - „Führe ein vollständiges Audit durch.“
 - „Wer ist Global Admin und hat davon jemand kein MFA?“
 - „Wird Legacy Authentication blockiert?“
+- „Was hat sich seit dem letzten Audit verändert?“
 
 ## Projektstruktur
 
@@ -55,20 +57,24 @@ agent/
 ├── graph_client.py    Graph-Login (Client Credentials) + graph_get mit Paging
 ├── tenant.py          Zentrale Graph-Abfragen (von Tools und fetch_tenant.py genutzt)
 ├── fetch_tenant.py    Snapshot aller Tenant-Daten nach data/
+├── compare_audits.py  CLI: zwei Audit-Snapshots vergleichen
 ├── logger.py          JSONL-Log pro Session nach logs/
 ├── prompts/system.md  System-Prompt (Auditor-Rolle, Regeln für Findings)
 ├── tools/
 │   ├── basic.py       get_current_time
 │   ├── weather.py     get_weather (Open-Meteo)
 │   ├── graph.py       Abfrage-Tools: Rollen, Benutzer, MFA, Policies
-│   └── audit.py       Audit-Checks + run_audit
+│   ├── audit.py       Audit-Checks + run_audit
+│   └── history.py     Audit-Snapshots speichern und vergleichen (Score)
 ├── data/              Snapshot (gitignored)
 └── logs/              Session-Logs (gitignored)
+reports/               Audit-Snapshots audit_<YYYYMMDD_HHMMSS>.json (gitignored)
+history/               Vergleiche <alt>__<neu>.json (gitignored)
 ```
 
 ## Audit-Checks
 
-Jeder Check holt Live-Daten, bewertet deterministisch und gibt Findings in einem festen Schema zurück. `run_audit()` führt alle 12 Checks aus, sortiert die Findings nach Severity und listet zusätzlich die **bestandenen** Checks (`checks_passed`). Jeder Check ist zusätzlich einzeln als Tool aufrufbar.
+Jeder Check holt Live-Daten, bewertet deterministisch und gibt Findings in einem festen Schema zurück. `run_audit()` führt alle 12 Checks aus, sortiert die Findings nach Severity und listet zusätzlich die **bestandenen** Checks (`checks_passed`). Das Ergebnis wird als Snapshot gespeichert und mit dem vorherigen verglichen (siehe [Audit-Verlauf](#audit-verlauf)). Jeder Check ist zusätzlich einzeln als Tool aufrufbar.
 
 | Tool | Prüft | Mögliche Findings | Referenz |
 |---|---|---|---|
@@ -116,6 +122,34 @@ Severity-Stufen: `critical` · `high` · `medium` · `low` · `informational`
 - Nicht automatisiert prüfbar: Break-Glass-Konten (nicht eindeutig erkennbar), Access Reviews (Governance-Lizenz), On-Prem-Empfehlungen des Secure Score (Kerberos, LAPS, Entra Connect).
 - Die Logik für CA-Policies, PIM, synchronisierte Konten, Passwortablauf und abgelaufene Secrets ist mit synthetischen Daten getestet, weil der Lab-Tenant diese Fälle nicht enthält.
 - CIS-Nummern sind laut Benchmark-Mappings über v4–v6 stabil (5.1.6.3 erst ab v6 belegt), können sich in künftigen Versionen aber verschieben.
+
+## Audit-Verlauf
+
+Zwei getrennte Schritte – wie Commit und `git diff`:
+
+1. **Zustandsaufnahme:** Jeder `run_audit()` speichert sein Ergebnis unverändert als Snapshot `reports/audit_<YYYYMMDD_HHMMSS>.json` (Zeitstempel, ausgeführte/bestandene Checks, Summary, Findings, Errors). Jedes Finding enthält zusätzlich `check` – den Check, der es geliefert hat.
+2. **Vergleich:** `compare_audits` vergleicht zwei Snapshots und legt das Ergebnis in `history/<alt>__<neu>.json` ab. Nach jedem `run_audit()` läuft er automatisch gegen den vorherigen Snapshot; das Tool liefert `{snapshot, audit, changes}` (`changes` ist beim ersten Audit `null`).
+
+Vergleich ohne neues Audit – im Chat („Was hat sich seit dem letzten Audit verändert?“, Tools `compare_audits` und `list_snapshots`) oder im Terminal:
+
+```bash
+python compare_audits.py                     # die letzten beiden Snapshots
+python compare_audits.py <alt> <neu>         # bestimmte Snapshots, z. B. 20261011_181500 20261014_153000
+python compare_audits.py --list              # vorhandene Snapshots
+```
+
+**Inhalt eines Vergleichs:**
+
+| Feld | Bedeutung |
+|---|---|
+| `score` | Risiko-Score alt → neu, Differenz und Bewertung (`verbessert` / `verschlechtert` / `unverändert`) |
+| `summary_delta` | Veränderung der Anzahl Findings pro Severity |
+| `new_findings` | Neu aufgetretene Findings (Verschlechterung) |
+| `resolved_findings` | Nicht mehr vorhandene Findings (Verbesserung) |
+| `changed_findings` | Gleiche ID, aber andere Severity oder hinzugekommene/entfernte betroffene Objekte |
+| `not_checked` | Findings, deren Check im neueren Audit fehlgeschlagen ist – **nicht** behoben |
+
+**Risiko-Score:** Summe der Risikopunkte aller Findings nach Severity – critical 10, high 5, medium 3, low 1, informational 0. Niedriger ist besser. Die Anzahl betroffener Objekte zählt bewusst nicht (sonst würde z. B. „30 Benutzer ohne MFA“ alles andere überdecken); Veränderungen dort zeigt `changed_findings`. In den Score fließen nur Checks ein, die in **beiden** Audits erfolgreich liefen – ein fehlgeschlagener Check soll den Score nicht scheinbar verbessern. Ausgeschlossene Checks stehen in `score.checks_excluded`.
 
 ## Testen
 

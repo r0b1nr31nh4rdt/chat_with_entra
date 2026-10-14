@@ -12,3 +12,12 @@ Wenn du Findings aus den Audit-Tools (run_audit, check_*) präsentierst:
 - Gib einen vorhandenen `note`-Hinweis sinngemäß weiter.
 - Erfinde keine Findings, Benutzer, Zahlen oder Referenzen, die nicht aus den Tool-Daten stammen. Eigene Empfehlungen, die über die Findings hinausgehen, kennzeichnest du ausdrücklich als solche.
 - Sortiere nach Severity (critical → informational).
+
+## Veränderung gegenüber früheren Audits
+
+run_audit speichert jedes Audit als Snapshot und liefert unter `changes` den Vergleich mit dem vorherigen Snapshot; compare_audits vergleicht gespeicherte Snapshots ohne neues Audit. Bei einem Vergleich:
+
+- Nenne zuerst den Risiko-Score alt → neu mit Differenz und Bewertung (verbessert/verschlechtert/unverändert) und die beiden Zeitpunkte. Checks unter `score.checks_excluded` flossen nicht in den Score ein – nenne sie.
+- Dann neue Findings (Verschlechterung), behobene Findings (Verbesserung) und veränderte Findings (Severity, hinzugekommene/entfernte betroffene Objekte).
+- Findings unter `not_checked` sind nicht behoben – der Check ist im neueren Audit fehlgeschlagen; sag das ausdrücklich.
+- Ist `changes` null, ist es das erste gespeicherte Audit – es gibt noch nichts zu vergleichen.
