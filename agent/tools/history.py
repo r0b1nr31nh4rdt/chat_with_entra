@@ -1,38 +1,57 @@
 # tools/history.py
-# Audit-Verlauf: Snapshots in reports/ sind reine Zustandsaufnahmen.
-# Der Vergleich zweier Snapshots ist ein eigener Vorgang und landet in history/ (wie ein git diff).
+# Audit-Verlauf: ein Ordner pro Lauf unter audits/<YYYYMMDD_HHMMSS>/
+#   snapshot.json  reine Zustandsaufnahme
+#   changes.json   Vergleich mit dem vorherigen Lauf (eigener Vorgang, wie ein git diff)
+#   summary.md     Zusammenfassung/Auswertung aus dem Chat (LLM-Text, gespeichert von main.py)
+# Frei gewählte Vergleiche nicht aufeinanderfolgender Läufe landen in audits/comparisons/.
 
 import json
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).parents[2]
-REPORTS_DIR = ROOT / "reports"
-HISTORY_DIR = ROOT / "history"
+AUDITS_DIR = ROOT / "audits"
+COMPARISONS_DIR = AUDITS_DIR / "comparisons"
 
 # Risikopunkte pro Finding nach Severity – die Anzahl betroffener Objekte zählt bewusst nicht,
 # sonst überdeckt z. B. „40 Benutzer ohne MFA“ alle anderen Findings
 SEVERITY_WEIGHTS = {"critical": 10, "high": 5, "medium": 3, "low": 1, "informational": 0}
 
 
-def _path(snapshot_id):
-    return REPORTS_DIR / f"audit_{snapshot_id}.json"
+def _run_dir(snapshot_id):
+    return AUDITS_DIR / snapshot_id
+
+
+def _write_json(path, data):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def list_snapshots():
     """Snapshot-IDs (Zeitstempel YYYYMMDD_HHMMSS), älteste zuerst."""
-    return sorted(p.stem.removeprefix("audit_") for p in REPORTS_DIR.glob("audit_*.json"))
+    return sorted(p.parent.name for p in AUDITS_DIR.glob("*/snapshot.json"))
 
 
 def save_snapshot(audit):
     """Speichert ein Audit-Ergebnis unverändert als Snapshot und liefert die Snapshot-ID."""
     snapshot_id = audit["timestamp"].replace("-", "").replace(":", "").replace("T", "_")
-    REPORTS_DIR.mkdir(exist_ok=True)
-    _path(snapshot_id).write_text(json.dumps(audit, indent=2, ensure_ascii=False), encoding="utf-8")
+    _write_json(_run_dir(snapshot_id) / "snapshot.json", audit)
     return snapshot_id
 
 
+def save_summary(snapshot_id, question, answer, model):
+    """Speichert die Chat-Auswertung zu einem Lauf – genau den Text, den der Benutzer gesehen hat."""
+    header = (
+        f"# Audit-Zusammenfassung {snapshot_id}\n\n"
+        f"> Vom LLM erstellt ({model}) am {datetime.now():%Y-%m-%d %H:%M}. Maßgeblich sind die Fakten in "
+        f"`snapshot.json` und `changes.json` – dieser Text ist ihre Auswertung.\n>\n"
+        f"> Frage: {question}\n\n---\n\n"
+    )
+    (_run_dir(snapshot_id) / "summary.md").write_text(header + answer + "\n", encoding="utf-8")
+
+
 def _load_snapshot(snapshot_id):
-    return json.loads(_path(snapshot_id).read_text(encoding="utf-8"))
+    return json.loads((_run_dir(snapshot_id) / "snapshot.json").read_text(encoding="utf-8"))
 
 
 def _ok_checks(audit):
@@ -78,7 +97,10 @@ def _diff(old, new):
 
 
 def compare_audits(old=None, new=None):
-    """Vergleicht zwei Snapshots (Standard: die letzten beiden) und speichert das Ergebnis in history/."""
+    """Vergleicht zwei Snapshots (Standard: die letzten beiden).
+
+    Direkt aufeinanderfolgende Läufe → audits/<neu>/changes.json, sonst audits/comparisons/<alt>__<neu>.json.
+    """
     snapshots = list_snapshots()
     new = new or (snapshots[-1] if snapshots else None)
     if old is None:
@@ -109,8 +131,8 @@ def compare_audits(old=None, new=None):
         "summary_delta": {s: b["summary"][s] - a["summary"][s] for s in SEVERITY_WEIGHTS},
         **_diff(a, b),
     }
-    HISTORY_DIR.mkdir(exist_ok=True)
-    (HISTORY_DIR / f"{old}__{new}.json").write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
+    consecutive = snapshots.index(new) - snapshots.index(old) == 1
+    _write_json(_run_dir(new) / "changes.json" if consecutive else COMPARISONS_DIR / f"{old}__{new}.json", result)
     return result
 
 

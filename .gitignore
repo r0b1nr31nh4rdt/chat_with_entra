@@ -16,9 +16,9 @@ __pycache__/
 logs/
 data/
 
-# Audit-Snapshots und Vergleiche (enthalten echte UPNs/App-Namen aus dem Tenant)
+# Audit-Läufe (enthalten echte UPNs/App-Namen aus dem Tenant)
+audits/
 reports/
-history/
 
 #vscode
 .vscode/

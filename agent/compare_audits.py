@@ -1,5 +1,5 @@
 # compare_audits.py
-# Vergleicht zwei gespeicherte Audit-Snapshots und legt das Ergebnis in history/ ab
+# Vergleicht zwei gespeicherte Audit-Snapshots und legt das Ergebnis unter audits/ ab (siehe tools/history.py)
 #   python compare_audits.py                  → die letzten beiden Snapshots
 #   python compare_audits.py <alt> <neu>      → bestimmte Snapshots (IDs: YYYYMMDD_HHMMSS)
 #   python compare_audits.py --list           → vorhandene Snapshots

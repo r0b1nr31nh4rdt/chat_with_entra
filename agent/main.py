@@ -14,6 +14,7 @@ from mcp.client.stdio import stdio_client
 
 from llm import client, DEPLOYMENT
 from logger import log
+from tools.history import save_summary
 
 BASE_DIR = Path(__file__).parent
 LOG_DIR = BASE_DIR / "logs"
@@ -48,8 +49,18 @@ async def run_tool(session, name, arguments):
     return text
 
 
+def _snapshot_id(result):
+    """Snapshot-ID aus dem run_audit-Ergebnis (None, falls das Tool fehlgeschlagen ist)."""
+    try:
+        return json.loads(result).get("snapshot")
+    except (json.JSONDecodeError, AttributeError):
+        return None
+
+
 async def ask(session, tools, history):
     """Eine Nutzerfrage abarbeiten, inkl. beliebig vieler Tool-Runden."""
+    question = history[-1]["content"]
+    snapshot_id = None  # gesetzt, wenn in dieser Runde ein Audit gelaufen ist
     for round_ in range(1, MAX_ROUNDS + 1):
         log("request", round=round_, input=history)
 
@@ -70,13 +81,19 @@ async def ask(session, tools, history):
 
         calls = [item for item in output if item["type"] == "function_call"]
         if not calls:
+            if snapshot_id:
+                # Deterministisch gespeichert statt per Tool – so landet genau der Text, den der Benutzer sieht, im Lauf
+                save_summary(snapshot_id, question, response.output_text, DEPLOYMENT)
             return response.output_text
 
         for call in calls:
+            result = await run_tool(session, call["name"], call.get("arguments"))
+            if call["name"] == "run_audit":
+                snapshot_id = _snapshot_id(result) or snapshot_id
             history.append({
                 "type": "function_call_output",
                 "call_id": call["call_id"],
-                "output": await run_tool(session, call["name"], call.get("arguments")),
+                "output": result,
             })
 
     return "Abbruch: maximale Rundenzahl erreicht."

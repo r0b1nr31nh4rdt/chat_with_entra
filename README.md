@@ -65,11 +65,10 @@ agent/
 │   ├── weather.py     get_weather (Open-Meteo)
 │   ├── graph.py       Abfrage-Tools: Rollen, Benutzer, MFA, Policies
 │   ├── audit.py       Audit-Checks + run_audit
-│   └── history.py     Audit-Snapshots speichern und vergleichen (Score)
+│   └── history.py     Audit-Läufe speichern und vergleichen (Score)
 ├── data/              Snapshot (gitignored)
 └── logs/              Session-Logs (gitignored)
-reports/               Audit-Snapshots audit_<YYYYMMDD_HHMMSS>.json (gitignored)
-history/               Vergleiche <alt>__<neu>.json (gitignored)
+audits/                Ein Ordner pro Audit-Lauf (gitignored, siehe Audit-Verlauf)
 ```
 
 ## Audit-Checks
@@ -125,10 +124,23 @@ Severity-Stufen: `critical` · `high` · `medium` · `low` · `informational`
 
 ## Audit-Verlauf
 
-Zwei getrennte Schritte – wie Commit und `git diff`:
+Jeder Audit-Lauf bekommt einen eigenen Ordner – alles, was zu einem Lauf gehört, liegt zusammen:
 
-1. **Zustandsaufnahme:** Jeder `run_audit()` speichert sein Ergebnis unverändert als Snapshot `reports/audit_<YYYYMMDD_HHMMSS>.json` (Zeitstempel, ausgeführte/bestandene Checks, Summary, Findings, Errors). Jedes Finding enthält zusätzlich `check` – den Check, der es geliefert hat.
-2. **Vergleich:** `compare_audits` vergleicht zwei Snapshots und legt das Ergebnis in `history/<alt>__<neu>.json` ab. Nach jedem `run_audit()` läuft er automatisch gegen den vorherigen Snapshot; das Tool liefert `{snapshot, audit, changes}` (`changes` ist beim ersten Audit `null`).
+```
+audits/
+├── 20261014_191558/
+│   ├── snapshot.json     Zustandsaufnahme (Fakten)
+│   ├── changes.json      Vergleich mit dem vorherigen Lauf
+│   └── summary.md        Zusammenfassung und Auswertung aus dem Chat
+├── 20261014_192427/
+│   └── …
+└── comparisons/          Frei gewählte Vergleiche nicht aufeinanderfolgender Läufe
+    └── <alt>__<neu>.json
+```
+
+1. **Zustandsaufnahme:** `run_audit()` speichert sein Ergebnis unverändert als `snapshot.json` (Zeitstempel, ausgeführte/bestandene Checks, Summary, Findings, Errors). Jedes Finding enthält zusätzlich `check` – den Check, der es geliefert hat.
+2. **Vergleich:** Danach vergleicht `compare_audits` als eigener Schritt mit dem vorherigen Lauf → `changes.json`. Das Tool liefert `{snapshot, audit, changes}` (`changes` ist beim ersten Audit `null`).
+3. **Auswertung:** Die Antwort, die das LLM im Chat zu einem Audit gibt, speichert `main.py` als `summary.md` – unverändert und deterministisch, nicht über ein Tool des LLM. Der Kopf nennt Modell, Zeitpunkt und Frage. Der Text ist LLM-generiert und kann bei jedem Lauf anders formuliert sein; maßgeblich sind `snapshot.json` und `changes.json`.
 
 Vergleich ohne neues Audit – im Chat („Was hat sich seit dem letzten Audit verändert?“, Tools `compare_audits` und `list_snapshots`) oder im Terminal:
 
