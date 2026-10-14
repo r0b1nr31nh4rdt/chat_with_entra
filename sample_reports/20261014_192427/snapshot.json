@@ -1,0 +1,269 @@
+{
+  "timestamp": "2026-10-14T19:24:27",
+  "checks_run": [
+    "check_legacy_auth",
+    "check_admin_mfa",
+    "check_service_principals",
+    "check_global_admin_count",
+    "check_user_mfa",
+    "check_tenant_settings",
+    "check_privileged_assignments",
+    "check_password_expiration",
+    "check_risk_policies",
+    "check_inactive_admins",
+    "check_app_credentials",
+    "check_pim"
+  ],
+  "checks_passed": [
+    "check_password_expiration",
+    "check_app_credentials"
+  ],
+  "summary": {
+    "critical": 4,
+    "high": 2,
+    "medium": 7,
+    "low": 1,
+    "informational": 2
+  },
+  "findings": [
+    {
+      "id": "ADMIN-NO-MFA",
+      "severity": "critical",
+      "title": "Privilegierte Benutzer ohne MFA-Registrierung",
+      "affected": [
+        "user05@contoso.onmicrosoft.com",
+        "user16@contoso.onmicrosoft.com",
+        "user21@contoso.onmicrosoft.com",
+        "user25@contoso.onmicrosoft.com",
+        "user27@contoso.onmicrosoft.com",
+        "user29@contoso.onmicrosoft.com"
+      ],
+      "evidence": "6 von 7 privilegierten Benutzern: isMfaRegistered=false (Rollen: Global Administrator)",
+      "reference": "CIS M365 5.2.2.1",
+      "check": "check_admin_mfa"
+    },
+    {
+      "id": "MFA-NOT-ENFORCED",
+      "severity": "critical",
+      "title": "MFA wird für privilegierte Benutzer nicht erzwungen",
+      "affected": [
+        "user05@contoso.onmicrosoft.com",
+        "user16@contoso.onmicrosoft.com",
+        "user21@contoso.onmicrosoft.com",
+        "user25@contoso.onmicrosoft.com",
+        "user27@contoso.onmicrosoft.com",
+        "user29@contoso.onmicrosoft.com",
+        "user03@contoso.onmicrosoft.com"
+      ],
+      "evidence": "Security Defaults: isEnabled=false; 0 aktive CA-Policies mit MFA-Anforderung; 7 von 7 privilegierten Benutzern von keiner MFA-Policy erfasst – darunter 1 mit registrierter MFA, die beim Login trotzdem nicht abgefragt wird: user03@contoso.onmicrosoft.com",
+      "reference": "CIS M365 5.2.2.1",
+      "check": "check_admin_mfa"
+    },
+    {
+      "id": "SP-PRIVILEGED-ROLE",
+      "severity": "critical",
+      "title": "Service Principals in privilegierten Directory-Rollen",
+      "affected": [
+        "ServicePrincipal-A",
+        "ServicePrincipal-C",
+        "ServicePrincipal-B"
+      ],
+      "evidence": "ServicePrincipal-A: Privileged Authentication Administrator; ServicePrincipal-C: Global Administrator; ServicePrincipal-B: Global Administrator",
+      "reference": "Microsoft Learn: Best practices for Microsoft Entra roles (Service Principals mit privilegierten Rollen = Control Plane)",
+      "check": "check_service_principals"
+    },
+    {
+      "id": "SP-CRITICAL-GRAPH-PERMISSION",
+      "severity": "critical",
+      "title": "Service Principals mit kritischen Microsoft-Graph-Permissions",
+      "affected": [
+        "ServicePrincipal-C",
+        "ServicePrincipal-B"
+      ],
+      "evidence": "ServicePrincipal-C: Directory.ReadWrite.All, RoleManagement.ReadWrite.Directory; ServicePrincipal-B: Directory.ReadWrite.All, RoleManagement.ReadWrite.Directory – jede dieser Permissions erlaubt die Eskalation bis Global Admin",
+      "reference": "Microsoft Learn: Best practices for Microsoft Entra roles",
+      "check": "check_service_principals"
+    },
+    {
+      "id": "LEGACY-AUTH-NOT-BLOCKED",
+      "severity": "high",
+      "title": "Legacy Authentication wird nicht blockiert",
+      "affected": [
+        "Alle Benutzer"
+      ],
+      "evidence": "Security Defaults: isEnabled=false; 0 CA-Policies, keine blockiert Legacy Auth für alle Benutzer",
+      "reference": "CIS M365 5.2.2.3",
+      "note": "Exchange-seitige Einstellungen nicht über Graph prüfbar.",
+      "check": "check_legacy_auth"
+    },
+    {
+      "id": "USER-NO-MFA",
+      "severity": "high",
+      "title": "Benutzer ohne MFA-Registrierung",
+      "affected": [
+        "user01@contoso.onmicrosoft.com",
+        "user04@contoso.onmicrosoft.com",
+        "user05@contoso.onmicrosoft.com",
+        "user06@contoso.onmicrosoft.com",
+        "user07@contoso.onmicrosoft.com",
+        "user09@contoso.onmicrosoft.com",
+        "user10@contoso.onmicrosoft.com",
+        "user11@contoso.onmicrosoft.com",
+        "user12@contoso.onmicrosoft.com",
+        "user13@contoso.onmicrosoft.com",
+        "user14@contoso.onmicrosoft.com",
+        "user15@contoso.onmicrosoft.com",
+        "user17@contoso.onmicrosoft.com",
+        "user18@contoso.onmicrosoft.com",
+        "user19@contoso.onmicrosoft.com",
+        "user20@contoso.onmicrosoft.com",
+        "user21@contoso.onmicrosoft.com",
+        "user22@contoso.onmicrosoft.com",
+        "user23@contoso.onmicrosoft.com",
+        "user24@contoso.onmicrosoft.com",
+        "user25@contoso.onmicrosoft.com",
+        "user26@contoso.onmicrosoft.com",
+        "user27@contoso.onmicrosoft.com",
+        "user28@contoso.onmicrosoft.com",
+        "user29@contoso.onmicrosoft.com",
+        "user30@contoso.onmicrosoft.com",
+        "user31@contoso.onmicrosoft.com",
+        "user32@contoso.onmicrosoft.com",
+        "user33@contoso.onmicrosoft.com",
+        "user34@contoso.onmicrosoft.com"
+      ],
+      "evidence": "30 von 33 aktiven Benutzern: isMfaRegistered=false (91 %)",
+      "reference": "CIS M365 5.2.2.2",
+      "check": "check_user_mfa"
+    },
+    {
+      "id": "GA-COUNT-TOO-HIGH",
+      "severity": "medium",
+      "title": "Zu viele Global Administrators",
+      "affected": [
+        "user05@contoso.onmicrosoft.com",
+        "user16@contoso.onmicrosoft.com",
+        "user21@contoso.onmicrosoft.com",
+        "user25@contoso.onmicrosoft.com",
+        "user27@contoso.onmicrosoft.com",
+        "user29@contoso.onmicrosoft.com",
+        "user03@contoso.onmicrosoft.com"
+      ],
+      "evidence": "7 Benutzer mit Global Administrator (Soll: 2–4); zusätzlich 2 Service Principals mit Global Administrator: ServicePrincipal-C, ServicePrincipal-B",
+      "reference": "CIS M365 1.1.3",
+      "check": "check_global_admin_count"
+    },
+    {
+      "id": "USER-CONSENT-ALLOWED",
+      "severity": "medium",
+      "title": "Benutzer dürfen Apps selbst Zugriff auf Unternehmensdaten erteilen",
+      "affected": [
+        "Alle Benutzer"
+      ],
+      "evidence": "permissionGrantPoliciesAssigned: ManagePermissionGrantsForSelf.microsoft-user-default-recommended, ManagePermissionGrantsForSelf.microsoft-user-default-allow-consent-apps",
+      "reference": "CIS M365 5.1.5.1",
+      "check": "check_tenant_settings"
+    },
+    {
+      "id": "GUEST-INVITE-UNRESTRICTED",
+      "severity": "medium",
+      "title": "Gast-Einladungen nicht auf Admins/Guest Inviter beschränkt",
+      "affected": [
+        "Alle Benutzer"
+      ],
+      "evidence": "allowInvitesFrom=everyone (Soll: adminsAndGuestInviters oder none)",
+      "reference": "CIS M365 5.1.6.3",
+      "check": "check_tenant_settings"
+    },
+    {
+      "id": "PRIVILEGED-ASSIGNMENTS-TOO-MANY",
+      "severity": "medium",
+      "title": "Zu viele privilegierte Rollenzuweisungen",
+      "affected": [
+        "user05@contoso.onmicrosoft.com",
+        "user16@contoso.onmicrosoft.com",
+        "ServicePrincipal-A",
+        "user21@contoso.onmicrosoft.com",
+        "user25@contoso.onmicrosoft.com",
+        "user27@contoso.onmicrosoft.com",
+        "user29@contoso.onmicrosoft.com",
+        "ServicePrincipal-C",
+        "user03@contoso.onmicrosoft.com",
+        "ServicePrincipal-B"
+      ],
+      "evidence": "10 privilegierte Rollenzuweisungen (Soll: unter 10)",
+      "reference": "Microsoft Learn: Best practices for Microsoft Entra roles (#6)",
+      "check": "check_privileged_assignments"
+    },
+    {
+      "id": "NO-USER-RISK-POLICY",
+      "severity": "medium",
+      "title": "Keine User-Risk-Policy aktiv",
+      "affected": [
+        "Alle Benutzer"
+      ],
+      "evidence": "Keine aktive CA-Policy mit conditions.userRiskLevels für alle Benutzer (0 CA-Policies insgesamt)",
+      "reference": "CIS M365 5.2.2.6",
+      "note": "Risk-basierte Conditional-Access-Policies erfordern Microsoft Entra ID P2.",
+      "check": "check_risk_policies"
+    },
+    {
+      "id": "NO-SIGNIN-RISK-POLICY",
+      "severity": "medium",
+      "title": "Keine Sign-in-Risk-Policy aktiv",
+      "affected": [
+        "Alle Benutzer"
+      ],
+      "evidence": "Keine aktive CA-Policy mit conditions.signInRiskLevels für alle Benutzer (0 CA-Policies insgesamt)",
+      "reference": "CIS M365 5.2.2.7",
+      "note": "Risk-basierte Conditional-Access-Policies erfordern Microsoft Entra ID P2.",
+      "check": "check_risk_policies"
+    },
+    {
+      "id": "ADMIN-INACTIVE",
+      "severity": "medium",
+      "title": "Inaktive privilegierte Konten",
+      "affected": [
+        "user16@contoso.onmicrosoft.com"
+      ],
+      "evidence": "1 von 7 privilegierten Benutzern: 1 ohne jede aufgezeichnete Anmeldung",
+      "reference": "Microsoft Learn: Best practices for Microsoft Entra roles (#4 Access Reviews)",
+      "note": "signInActivity wird erst ab Entra ID P1 erfasst; „nie angemeldet“ kann auch bedeuten, dass die Anmeldung vor Beginn der Aufzeichnung lag.",
+      "check": "check_inactive_admins"
+    },
+    {
+      "id": "USER-APP-REGISTRATION-ALLOWED",
+      "severity": "low",
+      "title": "Benutzer dürfen Anwendungen registrieren",
+      "affected": [
+        "Alle Benutzer"
+      ],
+      "evidence": "defaultUserRolePermissions.allowedToCreateApps=true",
+      "reference": "CIS M365 5.1.2.2",
+      "check": "check_tenant_settings"
+    },
+    {
+      "id": "AUDIT-APP-PERMISSIONS",
+      "severity": "informational",
+      "title": "Berechtigungen der eigenen Audit-App",
+      "affected": [
+        "chat_with_entra"
+      ],
+      "evidence": "chat_with_entra: AuditLog.Read.All, Directory.Read.All, Policy.Read.All, User.Read.All (nur Leserechte, aber tenant-weiter Lesezugriff)",
+      "reference": "Microsoft Learn: Best practices for Microsoft Entra roles",
+      "note": "Das Audit-Tool ist selbst ein privilegiertes Asset: wer das Client Secret erbeutet, kann den gesamten Tenant auslesen.",
+      "check": "check_service_principals"
+    },
+    {
+      "id": "PIM-NOT-CHECKABLE",
+      "severity": "informational",
+      "title": "PIM-Nutzung nicht prüfbar",
+      "affected": [],
+      "evidence": "roleEligibilitySchedules: HTTP 403 – Permission RoleEligibilitySchedule.Read.Directory fehlt",
+      "reference": "Microsoft Learn: Best practices for Microsoft Entra roles (#2 PIM)",
+      "note": "PIM erfordert außerdem Microsoft Entra ID P2.",
+      "check": "check_pim"
+    }
+  ],
+  "errors": []
+}

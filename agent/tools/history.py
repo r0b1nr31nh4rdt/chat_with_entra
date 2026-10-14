@@ -54,6 +54,18 @@ def _load_snapshot(snapshot_id):
     return json.loads((_run_dir(snapshot_id) / "snapshot.json").read_text(encoding="utf-8"))
 
 
+def load_audit(snapshot_id):
+    """Gespeicherten Lauf in derselben Form wie run_audit liefern – z. B. um nachträglich eine Summary zu erstellen."""
+    if snapshot_id not in list_snapshots():
+        return {"error": f"Snapshot {snapshot_id} nicht gefunden.", "snapshots": list_snapshots()}
+    changes = _run_dir(snapshot_id) / "changes.json"
+    return {
+        "snapshot": snapshot_id,
+        "audit": _load_snapshot(snapshot_id),
+        "changes": json.loads(changes.read_text(encoding="utf-8")) if changes.exists() else None,
+    }
+
+
 def _ok_checks(audit):
     return set(audit["checks_run"]) - {e["check"] for e in audit["errors"]}
 
@@ -152,9 +164,20 @@ TOOLS = [
     },
     {
         "type": "function",
+        "name": "load_audit",
+        "description": "Lädt einen gespeicherten Audit-Lauf (Snapshot und Vergleich mit dem vorherigen Lauf) ohne neues Audit – "
+                       "gleiche Form wie run_audit. Für Fragen zu einem früheren Audit oder eine nachträgliche Zusammenfassung.",
+        "parameters": {
+            "type": "object",
+            "properties": {"snapshot_id": {"type": "string", "description": "Snapshot-ID (YYYYMMDD_HHMMSS)"}},
+            "required": ["snapshot_id"],
+        },
+    },
+    {
+        "type": "function",
         "name": "list_snapshots",
         "description": "Listet alle gespeicherten Audit-Snapshots (IDs = Zeitstempel), älteste zuerst.",
         "parameters": {"type": "object", "properties": {}},
     },
 ]
-FUNCS = {"compare_audits": compare_audits, "list_snapshots": list_snapshots}
+FUNCS = {"compare_audits": compare_audits, "load_audit": load_audit, "list_snapshots": list_snapshots}

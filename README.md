@@ -58,6 +58,7 @@ agent/
 ├── tenant.py          Zentrale Graph-Abfragen (von Tools und fetch_tenant.py genutzt)
 ├── fetch_tenant.py    Snapshot aller Tenant-Daten nach data/
 ├── compare_audits.py  CLI: zwei Audit-Snapshots vergleichen
+├── export_sample.py   CLI: Audit-Läufe anonymisiert nach sample_reports/ exportieren
 ├── logger.py          JSONL-Log pro Session nach logs/
 ├── prompts/system.md  System-Prompt (Auditor-Rolle, Regeln für Findings)
 ├── tools/
@@ -69,6 +70,7 @@ agent/
 ├── data/              Snapshot (gitignored)
 └── logs/              Session-Logs (gitignored)
 audits/                Ein Ordner pro Audit-Lauf (gitignored, siehe Audit-Verlauf)
+sample_reports/        Anonymisierte Beispiel-Läufe (im Repo)
 ```
 
 ## Audit-Checks
@@ -140,7 +142,7 @@ audits/
 
 1. **Zustandsaufnahme:** `run_audit()` speichert sein Ergebnis unverändert als `snapshot.json` (Zeitstempel, ausgeführte/bestandene Checks, Summary, Findings, Errors). Jedes Finding enthält zusätzlich `check` – den Check, der es geliefert hat.
 2. **Vergleich:** Danach vergleicht `compare_audits` als eigener Schritt mit dem vorherigen Lauf → `changes.json`. Das Tool liefert `{snapshot, audit, changes}` (`changes` ist beim ersten Audit `null`).
-3. **Auswertung:** Die Antwort, die das LLM im Chat zu einem Audit gibt, speichert `main.py` als `summary.md` – unverändert und deterministisch, nicht über ein Tool des LLM. Der Kopf nennt Modell, Zeitpunkt und Frage. Der Text ist LLM-generiert und kann bei jedem Lauf anders formuliert sein; maßgeblich sind `snapshot.json` und `changes.json`.
+3. **Auswertung:** Die Antwort, die das LLM im Chat zu einem Audit gibt, speichert `main.py` als `summary.md` – unverändert und deterministisch, nicht über ein Tool des LLM. Für einen bereits gespeicherten Lauf lädt das Tool `load_audit` Snapshot und Vergleich ohne neues Audit – z. B. „Erstelle eine Zusammenfassung zum Audit 20261014_191558“; die Antwort wird dann ebenfalls als `summary.md` dieses Laufs gespeichert (eine vorhandene wird überschrieben). Der Kopf nennt Modell, Zeitpunkt und Frage. Der Text ist LLM-generiert und kann bei jedem Lauf anders formuliert sein; maßgeblich sind `snapshot.json` und `changes.json`.
 
 Vergleich ohne neues Audit – im Chat („Was hat sich seit dem letzten Audit verändert?“, Tools `compare_audits` und `list_snapshots`) oder im Terminal:
 
@@ -149,6 +151,14 @@ python compare_audits.py                     # die letzten beiden Snapshots
 python compare_audits.py <alt> <neu>         # bestimmte Snapshots, z. B. 20261011_181500 20261014_153000
 python compare_audits.py --list              # vorhandene Snapshots
 ```
+
+**Beispiel:** [`sample_reports/`](sample_reports/) enthält die ersten beiden Läufe des Lab-Tenants anonymisiert – inklusive `summary.md`, wie sie im Chat entsteht. Erzeugt mit:
+
+```bash
+python export_sample.py 20261014_191558 20261014_192427
+```
+
+Das Skript ersetzt UPNs, Anzeigenamen, Service-Principal- und App-Namen deterministisch durch Pseudonyme (`user01@contoso.onmicrosoft.com`, `ServicePrincipal-A`, `App-A`) – über alle Dateien und Läufe gleich –, ersetzt die Tenant-Domain und GUIDs und bricht ab, wenn danach noch ein Originalwert im Export steht.
 
 **Inhalt eines Vergleichs:**
 

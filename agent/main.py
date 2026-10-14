@@ -50,7 +50,7 @@ async def run_tool(session, name, arguments):
 
 
 def _snapshot_id(result):
-    """Snapshot-ID aus dem run_audit-Ergebnis (None, falls das Tool fehlgeschlagen ist)."""
+    """Snapshot-ID aus dem run_audit-/load_audit-Ergebnis (None, falls das Tool fehlgeschlagen ist)."""
     try:
         return json.loads(result).get("snapshot")
     except (json.JSONDecodeError, AttributeError):
@@ -60,7 +60,7 @@ def _snapshot_id(result):
 async def ask(session, tools, history):
     """Eine Nutzerfrage abarbeiten, inkl. beliebig vieler Tool-Runden."""
     question = history[-1]["content"]
-    snapshot_id = None  # gesetzt, wenn in dieser Runde ein Audit gelaufen ist
+    snapshot_id = None  # gesetzt, wenn in dieser Runde ein Audit gelaufen ist oder geladen wurde
     for round_ in range(1, MAX_ROUNDS + 1):
         log("request", round=round_, input=history)
 
@@ -88,7 +88,7 @@ async def ask(session, tools, history):
 
         for call in calls:
             result = await run_tool(session, call["name"], call.get("arguments"))
-            if call["name"] == "run_audit":
+            if call["name"] in ("run_audit", "load_audit"):
                 snapshot_id = _snapshot_id(result) or snapshot_id
             history.append({
                 "type": "function_call_output",
