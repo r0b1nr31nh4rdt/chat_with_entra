@@ -77,13 +77,14 @@ sample_reports/        Anonymisierte Beispiel-Läufe (im Repo)
 
 ## Audit-Checks
 
-Jeder Check holt Live-Daten, bewertet deterministisch und gibt Findings in einem festen Schema zurück. `run_audit()` führt alle 12 Checks aus, sortiert die Findings nach Severity und listet zusätzlich die **bestandenen** Checks (`checks_passed`). Das Ergebnis wird als Snapshot gespeichert und mit dem vorherigen verglichen (siehe [Audit-Verlauf](#audit-verlauf)). Jeder Check ist zusätzlich einzeln als Tool aufrufbar.
+Jeder Check holt Live-Daten, bewertet deterministisch und gibt Findings in einem festen Schema zurück. `run_audit()` führt alle 13 Checks aus, sortiert die Findings nach Severity und listet zusätzlich die **bestandenen** Checks (`checks_passed`). Das Ergebnis wird als Snapshot gespeichert und mit dem vorherigen verglichen (siehe [Audit-Verlauf](#audit-verlauf)). Jeder Check ist zusätzlich einzeln als Tool aufrufbar.
 
 | Tool | Prüft | Mögliche Findings | Referenz |
 |---|---|---|---|
 | `check_legacy_auth` | Wird Legacy Auth blockiert? Ja, wenn Security Defaults an **oder** eine CA-Policy mit `state=enabled` (Report-Only zählt nicht), `clientAppTypes` ⊇ `exchangeActiveSync`+`other`, `block`, Benutzer = `All` | `LEGACY-AUTH-NOT-BLOCKED` (high), `LEGACY-AUTH-EXCLUSIONS` (low) | CIS M365 5.2.2.3 |
 | `check_admin_mfa` | Haben privilegierte Benutzer MFA **registriert** – und wird MFA für sie auch **erzwungen**? | `ADMIN-NO-MFA` (critical), `MFA-NOT-ENFORCED` (critical) | CIS M365 5.2.2.1 |
 | `check_service_principals` | SPs in privilegierten Directory-Rollen und SPs mit kritischen Graph-Permissions | `SP-PRIVILEGED-ROLE` (critical/high), `SP-CRITICAL-GRAPH-PERMISSION` (critical), `AUDIT-APP-PERMISSIONS` (informational) | Microsoft Learn: Best practices for Entra roles |
+| `check_sp_ownership` | Haben privilegierte SPs (wie bei `check_service_principals`) Owner ohne eigene aktive Admin-Rolle? Owner können dem SP Credentials hinzufügen und sich mit dessen Rechten anmelden | `SP-OWNER-NOT-ADMIN` (critical) | MITRE ATT&CK T1098.001; Microsoft Learn: Securing service principals |
 | `check_global_admin_count` | Liegt die Zahl der Global Admins (Benutzer) zwischen 2 und 4? | `GA-COUNT-TOO-HIGH` / `GA-COUNT-TOO-LOW` (medium) | CIS M365 1.1.3 |
 | `check_user_mfa` | Haben alle aktiven Benutzer MFA registriert? | `USER-NO-MFA` (high) | CIS M365 5.2.2.2 |
 | `check_tenant_settings` | User Consent für Apps, App-Registrierung durch Benutzer, Gast-Einladungen (`authorizationPolicy`) | `USER-CONSENT-ALLOWED` (high bei legacy, sonst medium), `USER-APP-REGISTRATION-ALLOWED` (low), `GUEST-INVITE-UNRESTRICTED` (medium/low) | CIS M365 5.1.5.1, 5.1.2.2, 5.1.6.3 |
@@ -119,6 +120,7 @@ Severity-Stufen: `critical` · `high` · `medium` · `low` · `informational`
 **Bekannte Grenzen:**
 
 - Exchange-seitige Einstellungen (z. B. Basic Auth pro Protokoll) sind über Graph nicht prüfbar.
+- `check_sp_ownership` prüft Owner des Service Principals, nicht Owner der App-Registrierung (`/applications/{id}/owners`), die ebenfalls Credentials hinzufügen können.
 - Gruppenbasierte Zuweisungen in CA-Policies werden nicht aufgelöst. Erfasst eine MFA-Policy Admins nur über eine Gruppe, meldet `check_admin_mfa` sie als „nicht erzwungen“.
 - *Eligible* PIM-Zuweisungen sind nur mit zusätzlicher Permission `RoleEligibilitySchedule.Read.Directory` (und Entra ID P2) sichtbar. Ohne sie meldet `check_pim` „nicht prüfbar“, die übrigen Checks berücksichtigen nur aktive Zuweisungen.
 - `signInActivity` (für `check_inactive_admins`) wird erst ab Entra ID P1 erfasst.

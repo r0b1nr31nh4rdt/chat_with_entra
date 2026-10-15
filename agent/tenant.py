@@ -55,6 +55,12 @@ def fetch_service_principal_id(app_id):
     return sps[0]["id"] if sps else None
 
 
+def fetch_service_principal_owners(sp_id):
+    """Owner eines Service Principals (Benutzer oder andere SPs)."""
+    owners = graph_get(f"/servicePrincipals/{sp_id}/owners?$select=id,displayName,userPrincipalName")
+    return [{k: v for k, v in o.items() if k in PRINCIPAL_FIELDS} for o in owners]
+
+
 def fetch(name):
     """Holt einen Datensatz live von Graph."""
     query = QUERIES[name]

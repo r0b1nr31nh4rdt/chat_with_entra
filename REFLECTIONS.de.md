@@ -1,12 +1,8 @@
 # Reflexion: Ein KI-Agent für Identity Security
 
-**Deutsch** · [English](REFLECTIONS.md)
-
-*Entwurf. Die mit **[TODO]** markierten Abschnitte brauchen noch meine eigenen Beobachtungen aus dem EntraGoat-Durchlauf.*
-
 ## Was ich gebaut habe
 
-Ich habe einen Python-Agenten gebaut, der Fragen zu einem Entra-ID-Tenant beantwortet und ihn auf typische Fehlkonfigurationen prüft. Das Modell (gpt-5-mini) läuft in Azure AI Foundry im Cybersteps-Tenant. Die Daten kommen live per Microsoft Graph aus dem Pearson-Lab-Tenant. Mein lokales Skript ist die einzige Verbindung zwischen beiden: Die Tenants sprechen nie direkt miteinander, und das Modell sieht nie die Graph-Zugangsdaten, sondern nur die Ergebnisse, die mein Code zurückgibt. Die Graph-Abfragen stelle ich über einen eigenen MCP-Server als Tools bereit. Die Audit-Checks sind deterministische Python-Funktionen. Das Modell wählt Tools aus, erklärt die Findings und schlägt Maßnahmen vor.
+Ich habe einen Python-Agenten gebaut, der Fragen zu einem Entra-ID-Tenant beantwortet und ihn auf typische Fehlkonfigurationen prüft. Das Modell (gpt-5.4-mini) läuft in Azure AI Foundry im Cybersteps-Tenant. Die Daten kommen live per Microsoft Graph aus dem Pearson-Lab-Tenant. Mein lokales Skript ist die einzige Verbindung zwischen beiden: Die Tenants sprechen nie direkt miteinander, und das Modell sieht nie die Graph-Zugangsdaten, sondern nur die Ergebnisse, die mein Code zurückgibt. Die Graph-Abfragen stelle ich über einen eigenen MCP-Server als Tools bereit. Die Audit-Checks sind deterministische Python-Funktionen. Das Modell wählt Tools aus, erklärt die Findings und schlägt Maßnahmen vor.
 
 ## 1. Das Modell sollte nicht zählen
 
@@ -33,15 +29,28 @@ Der Tenant hat keine Conditional-Access-Policies, und die Security Defaults sind
 
 **Erkenntnis:** Das Schwierige beim Identity-Audit ist nicht das Abrufen der Daten, sondern zu wissen, was die Daten *nicht* belegen.
 
-## 4. Einzelchecks vs. Angriffspfade
+## 4. Einzelchecks vs. Angriffspfade (EntraGoat Szenario 1)
 
-**[TODO – nach Szenario 1 ausfüllen]**
-- Was hat der Agent mit den vorhandenen Checks gefunden?
-- Was hat er übersehen, und warum? Meine Erwartung: EntraGoat-Pfade sind *Ketten* (z. B. ein normaler Benutzer ist Owner eines Service Principals, der eine gefährliche Berechtigung hat). Checks, die immer nur ein Objekt betrachten, sehen die gefährliche Berechtigung, aber nicht, wer sie kontrolliert.
-- Welches Tool habe ich ergänzt, um die Lücke zu schließen (z. B. Owner privilegierter Service Principals), und hat es funktioniert?
-- Ein konkretes Beispiel, wo der Agent schneller war als eine manuelle Suche, und eines, wo er falsch lag oder halluziniert hat (mit Logauszug).
+**Vorgehen:** Ich habe zuerst ein Baseline-Audit gemacht, dann EntraGoat-Szenario 1 deployt, ein zweites Audit laufen lassen und beide automatisch verglichen (`compare_audits`). Die Ground Truth habe ich aus der offiziellen EntraGoat-Lösung genommen und nicht selbst erarbeitet.
 
-Hinweis für den Vergleich: Jedes EntraGoat-Szenario legt einen eigenen Global Administrator ohne MFA an, der die Flag enthält. Der Agent meldet diese sofort als „mehr Global Admins ohne MFA“. Sie sind aber das *Ziel* des Angriffs, nicht die Schwachstelle. Mehr Findings heißen nicht, dass der Agent den eigentlichen Angriffspfad gefunden hat.
+**Die Fehlkonfiguration:** Der Finance-Mitarbeiter `david.martinez`, ein normaler Benutzer ohne Admin-Rolle, ist Owner des Service Principals „Finance Analytics Dashboard“. Dieser SP hat die Rolle *Privileged Authentication Administrator* (PAA), eine der am höchsten privilegierten Rollen in Entra, die auch Konten von Global Administrators beeinflussen kann. Wer einen Service Principal besitzt, kontrolliert faktisch auch dessen Rechte. Das Risiko entsteht also aus der **Kombination** zweier Einstellungen, die einzeln harmlos wirken können: Ownership durch einen normalen Benutzer und eine privilegierte Rolle am SP.
+
+**Was der Agent gefunden hat:** die privilegierte Rolle. `SP-PRIVILEGED-ROLE` listet im zweiten Audit neu „Finance Analytics Dashboard: Privileged Authentication Administrator“. Der Vorher/Nachher-Vergleich (`changed_findings`) hat diese Änderung in Sekunden isoliert. Manuell hätte ich dafür alle Rollen und ihre Mitglieder im Portal durchgehen müssen.
+
+**Was der Agent übersehen hat:**
+- **Die Ownership, also die eigentliche Schwachstelle.** Kein Check fragt, *wer* einen privilegierten Service Principal kontrolliert. Dass ein normaler Finance-Benutzer über den SP faktisch an hochprivilegierte Rechte kommt, steht nirgends im Report.
+- **Die Einordnung der Rolle.** Meine Severity-Logik stuft nur Global Administrator als *critical* ein. Das Finding ist nur deshalb critical, weil im selben Finding zwei SPs mit Global Admin stehen. Für sich allein wäre der neue SP nur als *high* eingestuft worden, obwohl PAA in der Wirkung nahe an Global Admin liegt.
+- **Credentials am Service Principal.** `check_app_credentials` prüft nur Secrets an *Application*-Objekten. Credentials, die direkt am Service Principal hinterlegt sind, sieht der Check nicht. Ein solches zusätzliches Secret an einem privilegierten SP würde mein Audit also nicht melden.
+
+**Rauschen:** Die beiden *neuen* Findings (`PRIVILEGED-ASSIGNMENTS-TOO-MANY`, `ADMIN-INACTIVE`) und die Erweiterungen bei `ADMIN-NO-MFA`, `MFA-NOT-ENFORCED` und `GA-COUNT-TOO-HIGH` gehen alle auf den Flag-Admin `EntraGoat-admin-s1` zurück bzw. auf das Überschreiten eines Schwellwerts (8 → 10 privilegierte Zuweisungen). Der Risiko-Score stieg von 66 auf 72, und zwar **ausschließlich durch diese Nebeneffekte**. Die eigentlich relevante Änderung, der neue SP mit PAA, hat den Score überhaupt nicht verändert, weil sie nur als weiterer Eintrag in einem bestehenden Finding auftauchte. Ein aggregierter Score ist für Angriffspfade also ein schlechter Indikator.
+
+**Das LLM:** Die Zusammenfassung hat Zahlen und Namen korrekt wiedergegeben. Da sie aus dem Code kamen, gab es hier keine Halluzination. Die Risikoerklärung für den neuen SP blieb aber generisch („wenn das Secret kompromittiert wird …“). Die Verbindung „normaler Benutzer besitzt hochprivilegierten SP“ hat das Modell nicht hergestellt, weil die Ownership in den Daten gar nicht vorkam. Den Flag-Admin hat es als „zusätzlichen inaktiven Admin“ gemeldet, ohne zu erkennen, dass er zum Szenario gehört. Das Modell kann nur verknüpfen, was die Tools liefern.
+
+**Verbesserung:** Ich habe einen neuen Check `check_sp_ownership` ergänzt. Er fragt für jeden Service Principal mit privilegierter Rolle die Owner ab und meldet Owner ohne eigene Admin-Rolle als *critical*. Das dritte Audit (15.10.) zeigt das Ergebnis: Das neue Finding `SP-OWNER-NOT-ADMIN` nennt genau `david.martinez` als Owner von „Finance Analytics Dashboard (Privileged Authentication Administrator)“. Damit stehen beide Glieder der Kette im Report. Auch die LLM-Erklärung wurde dadurch konkret: Behebung über *Enterprise applications → Owners*, Owner-Liste reduzieren, Credentials des SP rotieren. Das Modell konnte die Verbindung herstellen, sobald die Daten dafür vorlagen.
+
+Bemerkenswert: Der Score blieb trotz neuem *critical*-Finding bei 72 („unverändert“). Das ist gewollt, denn neue Checks werden beim Vergleich aus dem Score ausgeschlossen, damit alter und neuer Lauf vergleichbar bleiben. Es zeigt aber noch einmal, dass ein einzelner Score ohne Kontext in die Irre führen kann.
+
+**Noch offen:** Owner der zugehörigen *App-Registrierung* werden noch nicht geprüft, ebenso wenig Credentials direkt am Service Principal. PAA wird in der Severity-Logik noch nicht als Global-Admin-gleichwertig behandelt.
 
 ## 5. MCP: eine Architekturentscheidung
 
@@ -69,4 +78,4 @@ Meine App-Registrierung hat Anwendungsberechtigungen wie `Directory.Read.All` un
 
 ## Fazit
 
-**[TODO – 3–4 Sätze in meinen eigenen Worten]** Vorschlag für die Richtung: Ein LLM ist nützlich als Schnittstelle zu Identitätsdaten und um Risiken verständlich zu erklären. Die Erkennung selbst muss deterministisch und überprüfbar sein, und der Mensch muss weiterhin wissen, was die Daten *nicht* zeigen.
+Ein LLM ist eine gute Schnittstelle zu Identitätsdaten: Es übersetzt Fragen in die richtigen Abfragen und erklärt Risiken verständlich. Die Erkennung selbst muss aber deterministisch und überprüfbar im Code passieren, denn das Modell zählt unzuverlässig und kann nur verknüpfen, was die Tools ihm liefern. EntraGoat hat gezeigt, wo die eigentliche Grenze liegt: Mein Agent hat zunächst nur die privilegierte Rolle gefunden, aber nicht die Ownership, die daraus erst ein Risiko macht. Erst ein zusätzlicher Check für diese Beziehung hat den Pfad sichtbar gemacht. Gefährlich wird es meist nicht durch eine einzelne Fehlkonfiguration, sondern durch die Beziehung zwischen Objekten. Ein brauchbarer Identity-Security-Agent muss deshalb Beziehungen abfragen können, nicht nur Eigenschaften, und der Mensch muss weiterhin wissen, was die Daten *nicht* zeigen.

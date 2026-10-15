@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 
-from tenant import fetch_graph_app_permissions, fetch_service_principal_id
+from tenant import fetch_graph_app_permissions, fetch_service_principal_id, fetch_service_principal_owners
 
 from .graph import _load
 from .history import compare_audits, list_snapshots, save_snapshot
@@ -264,6 +264,45 @@ def check_service_principals():
             note="Das Audit-Tool ist selbst ein privilegiertes Asset: wer das Client Secret erbeutet, kann den gesamten Tenant auslesen.",
         ))
     return findings
+
+
+# ─── Check 3b: Owner privilegierter Service Principals ──────────────────────
+
+
+def _privileged_sps():
+    """SP-ID → (Name, Gründe): SPs in privilegierten Rollen oder mit kritischen Graph-Permissions (wie Check 3)."""
+    sps = {}
+    for a in _privileged_assignments():
+        if not _is_user(a["principal"]):
+            sps.setdefault(a["principalId"], (a["principal"].get("displayName"), set()))[1].add(a["role"])
+    for p in fetch_graph_app_permissions():
+        if p["principalType"] == "ServicePrincipal" and p["permission"] in CRITICAL_GRAPH_PERMISSIONS:
+            sps.setdefault(p["principalId"], (p["principalDisplayName"], set()))[1].add(p["permission"])
+    return sps
+
+
+def check_sp_ownership():
+    # Owner eines SP können ihm Credentials hinzufügen und sich dann als SP anmelden –
+    # ein Owner ohne eigene Admin-Rolle hat damit einen Eskalationspfad zu den Rechten des SP
+    admins = {a["principalId"] for a in _privileged_assignments()}
+    paths = []
+    for sp_id, (sp_name, reasons) in _privileged_sps().items():
+        for owner in fetch_service_principal_owners(sp_id):
+            if owner["id"] not in admins:
+                name = owner.get("userPrincipalName") or owner.get("displayName")
+                paths.append((name, sp_name, sorted(reasons)))
+    if not paths:
+        return []
+    return [_finding(
+        "SP-OWNER-NOT-ADMIN", "critical",
+        "Owner privilegierter Service Principals ohne eigene Admin-Rolle",
+        sorted({owner for owner, _, _ in paths}),
+        "; ".join(f"{owner} ist Owner von {sp} ({', '.join(r)})" for owner, sp, r in sorted(paths))
+        + " – Owner können dem SP Credentials hinzufügen und sich mit dessen Rechten anmelden",
+        "MITRE ATT&CK T1098.001 (Additional Cloud Credentials); Microsoft Learn: Securing service principals in Microsoft Entra ID",
+        note="Geprüft werden Owner des Service Principals, nicht Owner der App-Registrierung. "
+             "Admin-Rollen zählen nur bei aktiver Zuweisung (PIM-eligible nicht berücksichtigt).",
+    )]
 
 
 # ─── Check 4: Anzahl Global Admins ──────────────────────────────────────────
@@ -570,6 +609,7 @@ CHECKS = {
     check_legacy_auth: "Wird Legacy Authentication per Security Defaults oder Conditional Access blockiert?",
     check_admin_mfa: "Haben privilegierte Benutzer MFA registriert, und wird MFA für sie auch erzwungen?",
     check_service_principals: "Service Principals mit privilegierten Directory-Rollen oder kritischen Graph-App-Permissions.",
+    check_sp_ownership: "Haben privilegierte Service Principals Owner ohne eigene Admin-Rolle (Eskalationspfad)?",
     check_global_admin_count: "Liegt die Anzahl der Global Administrators zwischen 2 und 4 (CIS)?",
     check_user_mfa: "Haben alle aktiven Benutzer MFA registriert?",
     check_tenant_settings: "Tenant-Einstellungen: User Consent für Apps, App-Registrierung durch Benutzer, Gast-Einladungen.",
